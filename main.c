@@ -62,28 +62,43 @@ static int list_resources(const char *dri_device)
         return -EINVAL;
     }
 
-    printf("connectors:");
+    printf("connectors:\n");
     for (int i = 0; i < res->count_connectors; i++) {
         drmModeConnectorPtr connector = 0;
         drmModeEncoderPtr encoder = 0;
 
-        printf("\nNumber: %d ", res->connectors[i]);
+        printf("Number: %d ", res->connectors[i]);
         connector = drmModeGetConnectorCurrent(fd, res->connectors[i]);
         if (!connector)
             continue;
 
-        printf("Name: %s-%u ", connector_type_name(connector->connector_type), connector->connector_type_id);
+        printf("Name: \"%s-%u\" ", connector_type_name(connector->connector_type), connector->connector_type_id);
 
         printf("Encoder: %d ", connector->encoder_id);
 
         encoder = drmModeGetEncoder(fd, connector->encoder_id);
         if (!encoder)
-            continue;
+            {printf("\n");continue;}
 
         printf("Crtc: %d", encoder->crtc_id);
 
         drmModeFreeEncoder(encoder);
         drmModeFreeConnector(connector);
+        printf("\n");
+
+        for (int j = 0; j < connector->count_modes; j++)
+        {
+            drmModeModeInfoPtr mode = connector->modes+j;
+            printf(
+                "    #%d  %u*%u  %uHz  t 0x%02X  f 0x%02X\n" ,
+                j ,
+                (unsigned int)mode->hdisplay ,
+                (unsigned int)mode->vdisplay ,
+                (unsigned int)mode->vrefresh ,
+                (unsigned int)mode->type ,
+                (unsigned int)mode->flags
+            );
+        }
     }
 
     printf("\nFramebuffers: ");
@@ -223,9 +238,10 @@ int main(int argc, char** argv)
     int list = 0;
     int resolution = 0;
     int ret;
+    int mode_select=-1;
 
     opterr = 0;
-    while ((c = getopt (argc, argv, "d:c:lrhv")) != -1) {
+    while ((c = getopt (argc, argv, "d:c:lrhvm:")) != -1) {
         switch (c)
         {
         case 'd':
@@ -240,6 +256,9 @@ int main(int argc, char** argv)
         case 'r':
             resolution = 1;
             break;
+        case 'm':
+            mode_select = strtol(optarg,0,0);
+            break;
         case 'h':
             usage();
             return 1;
@@ -253,7 +272,6 @@ int main(int argc, char** argv)
 
     if (dri_device == 0) {
         printf("Please set a device\n");
-        usage();
         return 3;
     }
 
@@ -263,7 +281,6 @@ int main(int argc, char** argv)
 
     if (connector == 0) {
         printf("Please set a connector\n");
-        usage();
         return 4;
     }
 
@@ -273,7 +290,7 @@ int main(int argc, char** argv)
 
     struct framebuffer fb;
     ret = 1;
-    if (get_framebuffer(dri_device, connector, &fb) == 0) {
+    if (get_framebuffer(dri_device, connector, mode_select, &fb) == 0) {
         if(!fill_framebuffer_from_stdin(&fb))
         {
             // successfully shown.

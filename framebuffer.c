@@ -68,7 +68,7 @@ void release_framebuffer(struct framebuffer *fb)
 
 }
 
-int get_framebuffer(const char *dri_device, const char *connector_name, struct framebuffer *fb)
+int get_framebuffer(const char *dri_device, const char *connector_name, int select_mode, struct framebuffer *fb)
 {
     int err;
     int fd;
@@ -115,11 +115,17 @@ int get_framebuffer(const char *dri_device, const char *connector_name, struct f
 
     /* Get the preferred resolution */
     drmModeModeInfoPtr resolution = 0;
-    for (int i = 0; i < connector->count_modes; i++) {
-            drmModeModeInfoPtr res = 0;
-            res = &connector->modes[i];
-            if (res->type & DRM_MODE_TYPE_PREFERRED)
-                    resolution = res;
+    if(select_mode>=0)
+    {
+        if(select_mode<connector->count_modes)
+            resolution = &connector->modes[select_mode];
+    }else{
+        for (int i = 0; i < connector->count_modes; i++) {
+                drmModeModeInfoPtr res = 0;
+                res = &connector->modes[i];
+                if (res->type & DRM_MODE_TYPE_PREFERRED)
+                        resolution = res;
+        }
     }
 
     if (!resolution) {
