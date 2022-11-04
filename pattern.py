@@ -16,15 +16,17 @@ def make_pattern():
 		for x in range(SZ):
 			cx = 0.5+x-0.5*SZ
 			r = math.sqrt(cx*cx+cy*cy)
-			ang = math.atan2(cy,cx)*128.0/math.pi
+			ang = int( math.atan2(cy,cx)*128.0/math.pi + 0.5 )
 			if r>0.5*SZ:
 				continue
 			if r>0.5*SZ-1.1:
 				B[x+SZ*y] = 1
+				continue
+			B[x+SZ*y] = ((ang>>4)&1)+2
 
 	# convert to output
 	res = list()
-	palette = (b'\xff\x00\x00\x00',b'\xff\xdd\xdd\xdd')
+	palette = (b'\x00\x00\x00\xff',b'\xdd\xdd\xdd\xff',b'\x00\x00\x77\xff',b'\x77\x00\x00\xff')
 	for y in range(SZ):
 		lin = B[y*SZ:y*SZ+SZ]
 		lin = b''.join(map(lambda gg:palette[gg],lin))
@@ -36,7 +38,7 @@ pat = make_pattern()
 
 for y in range(480):
 	for x in range(0,640,SZ):
-		sys.stdout.write(pat[y%SZ])
+		sys.stdout.buffer.write(pat[y%SZ])
 
 
 
