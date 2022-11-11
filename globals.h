@@ -11,4 +11,6 @@ extern drmModeEncoderPtr G_enc;
 extern drmModeCrtcPtr G_crtc;
 extern uint32_t G_crtcId;
 extern drmModeModeInfoPtr G_mode;
+extern uint16_t G_size_x;
+extern uint16_t G_size_y;
 

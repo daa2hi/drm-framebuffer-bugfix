@@ -56,7 +56,7 @@ void release_framebuffer(struct framebuffer *fb)
 
 }
 
-int get_framebuffer(drmModeModeInfoPtr mode, struct framebuffer *fb)
+int get_framebuffer(struct framebuffer *fb)
 {
 	int err;
 
@@ -66,8 +66,8 @@ int get_framebuffer(drmModeModeInfoPtr mode, struct framebuffer *fb)
 		return -EINVAL;
 	}
 
-	fb->dumb_framebuffer.height = mode->vdisplay;
-	fb->dumb_framebuffer.width = mode->hdisplay;
+	fb->dumb_framebuffer.height = G_size_x;
+	fb->dumb_framebuffer.width = G_size_y;
 	fb->dumb_framebuffer.bpp = 32;
 
 	err = ioctl(G_drm_dev, DRM_IOCTL_MODE_CREATE_DUMB, &fb->dumb_framebuffer);
@@ -76,7 +76,7 @@ int get_framebuffer(drmModeModeInfoPtr mode, struct framebuffer *fb)
 		goto cleanup;
 	}
 
-	err = drmModeAddFB(G_drm_dev, mode->hdisplay, mode->vdisplay, 24, 32,
+	err = drmModeAddFB(G_drm_dev, G_mode->hdisplay, G_size_y, 24, 32,
 			fb->dumb_framebuffer.pitch, fb->dumb_framebuffer.handle, &fb->buffer_id);
 	if (err) {
 		printf("Could not add framebuffer to drm (err=%d)\n", err);
@@ -103,7 +103,6 @@ int get_framebuffer(drmModeModeInfoPtr mode, struct framebuffer *fb)
 	}
 
 	fb->fd = G_drm_dev;
-	fb->resolution = mode;
 
 cleanup:
 	// We don't need the encoder and connector anymore so let's free them

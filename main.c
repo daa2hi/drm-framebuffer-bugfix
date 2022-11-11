@@ -55,6 +55,8 @@ drmModeEncoderPtr G_enc = 0;
 drmModeCrtcPtr G_crtc = 0;
 uint32_t G_crtcId = 0;
 drmModeModeInfoPtr G_mode = 0;
+uint16_t G_size_x = 0;
+uint16_t G_size_y = 0;
 
 char G_master = 0;
 
@@ -68,6 +70,7 @@ int main(int argc, char** argv)
 	int c;
 	int list = 0;
 	char read_stdin = 0;
+	char force_res = 0;
 	int ret;
 	int choose_width = -1;
 	int choose_height = -1;
@@ -75,7 +78,7 @@ int main(int argc, char** argv)
 	char waiting;
 
 	opterr = 0;
-	while ((c = getopt (argc, argv, "d:c:lhvx:y:i")) != -1) {
+	while ((c = getopt (argc, argv, "d:c:lhvx:y:if")) != -1) {
 		switch (c)
 		{
 		case 'd':
@@ -84,6 +87,8 @@ int main(int argc, char** argv)
 		case 'i':
 			read_stdin = 1;
 			break;
+		case 'f':
+			force_res = 1;
 		case 'c':
 			connector = optarg;
 			break;
@@ -162,6 +167,21 @@ int main(int argc, char** argv)
 	if(!G_mode)
 		goto leave;
 
+	if(force_res)
+	{
+		G_size_x = choose_width;
+		G_size_y = choose_height;
+		if( G_size_x==0 || G_size_y==0 )
+		{
+			fprintf(stderr,"when using -f , must supply width and height with -x <val> -y <val>\n");
+			ret = 1;
+			goto leave;
+		}
+	}else{
+		G_size_x = G_mode->hdisplay;
+		G_size_y = G_mode->vdisplay;
+	}
+
 	if(!get_prev_crtc())
 		goto leave;
 
@@ -169,7 +189,7 @@ int main(int argc, char** argv)
 	fb[0].fd=fb[1].fd=fb[2].fd=-1;
 	for(int i=0;i<3;i++)
 	{
-		if(get_framebuffer(G_mode,fb+i))
+		if(get_framebuffer(fb+i))
 		{
 			fprintf(stderr,"Error creating framebuffers\n");
 			ret = 4;goto leave;
@@ -189,7 +209,7 @@ int main(int argc, char** argv)
 		}
 		memcpy( fb[1].data+8 , fb[0].data , fb[0].dumb_framebuffer.size-8 );
 	}else{
-		fill_pattern((uint32_t*)fb[0].data,G_mode->hdisplay,G_mode->vdisplay,0);
+		fill_pattern((uint32_t*)fb[0].data,G_size_x,G_size_y,0);
 		memcpy( fb[1].data+8 , fb[0].data , fb[0].dumb_framebuffer.size-8 );
 	}
 
@@ -529,7 +549,7 @@ static int show_framebuffer(struct framebuffer *fb)
 
 	// Make sure we synchronize the display with the buffer. This also works if page flips are enabled
 	drmModeSetCrtc(G_drm_dev, G_crtc->crtc_id, 0, 0, 0, NULL, 0, NULL);
-	drmModeSetCrtc(G_drm_dev, G_crtc->crtc_id, fb->buffer_id, 0, 0, &G_conn->connector_id, 1, fb->resolution);
+	drmModeSetCrtc(G_drm_dev, G_crtc->crtc_id, fb->buffer_id, 0, 0, &G_conn->connector_id, 1, G_mode);
 
 	print_verbose("Sent image to framebuffer\n");
 
