@@ -27,8 +27,8 @@
 #include <time.h>
 #include <unistd.h>
 
-
 #include "framebuffer.h"
+#include "pattern.h"
 
 static int verbose = 0;
 
@@ -67,16 +67,21 @@ int main(int argc, char** argv)
 	char *connector = 0;
 	int c;
 	int list = 0;
+	char read_stdin = 0;
 	int ret;
 	int choose_width = -1;
 	int choose_height = -1;
+	char need_wait_flip;
 
 	opterr = 0;
-	while ((c = getopt (argc, argv, "d:c:lhvx:y:")) != -1) {
+	while ((c = getopt (argc, argv, "d:c:lhvx:y:i")) != -1) {
 		switch (c)
 		{
 		case 'd':
 			dri_device = optarg;
+			break;
+		case 'i':
+			read_stdin = 1;
 			break;
 		case 'c':
 			connector = optarg;
@@ -99,12 +104,6 @@ int main(int argc, char** argv)
 		default:
 			break;
 		}
-	}
-
-	if (connector==0)
-	{
-		printf("No connector selcted. Use -l to see all connectors of a device.\n");
-		return 1;
 	}
 
 	if (dri_device==0)
@@ -133,6 +132,12 @@ int main(int argc, char** argv)
 
 	if (list) {
 		return list_resources();
+	}
+
+	if (connector==0)
+	{
+		printf("No connector selcted. Use -l to see all connectors of a device.\n");
+		return 1;
 	}
 
 	G_conn = get_connector(connector);
@@ -174,16 +179,25 @@ int main(int argc, char** argv)
 		return 1;
 
 	ret = 1;
-	if(fill_framebuffer_from_stdin(fb+0))
+	if(read_stdin)
 	{
-		ret = 1;
-		goto leave;
+		if(fill_framebuffer_from_stdin(fb+0))
+		{
+			ret = 1;
+			goto leave;
+		}
+		memcpy( fb[1].data+8 , fb[0].data , fb[0].dumb_framebuffer.size-8 );
+	}else{
+		fill_pattern((uint32_t*)fb[0].data,G_mode->hdisplay,G_mode->vdisplay,0);
+		memcpy( fb[1].data+8 , fb[0].data , fb[0].dumb_framebuffer.size-8 );
 	}
 
-	memcpy( fb[1].data+8 , fb[0].data , fb[0].dumb_framebuffer.size-8 );
 
 	show_framebuffer(fb+0);
 //	show_framebuffer(fb+1);
+
+	usleep(1000000);
+	need_wait_flip = 0;
 
 	int ress[100];
 	for(int fl=0;fl<80;fl++)
@@ -193,34 +207,53 @@ int main(int argc, char** argv)
 		struct timeval tv;
 		char waiting;
 
+
+		fill_pattern(
+				(uint32_t*)fb[fl&1].data ,
+				G_mode->hdisplay ,
+				G_mode->vdisplay ,
+				fl
+		);
+
+
+		if(need_wait_flip)
+		{
+			while( waiting )	// waiting flag is reset when the handler is run.
+			{
+				FD_ZERO(&fds);
+				FD_SET(G_drm_dev, &fds);
+				evCtx.version = DRM_EVENT_CONTEXT_VERSION;
+				evCtx.page_flip_handler = dummy_page_flip_handler;
+
+				tv.tv_sec = 0;
+				tv.tv_usec = 500000;
+				int status = select(G_drm_dev+1,&fds,0,0,&tv);
+				if(status!=1)
+				{
+					printf("select returns %d\n",status);
+					fl+=1000000;
+					break;
+				}
+				printf(".");
+				drmHandleEvent(G_drm_dev,&evCtx);
+				printf(",");
+				need_wait_flip = 0;
+				break;
+			}
+		}
+
+
 		waiting = 1;
 		ret = drmModePageFlip( G_drm_dev , G_crtcId , fb[fl&1].buffer_id , DRM_MODE_PAGE_FLIP_EVENT , &waiting );
 		ress[fl] = ret;
+		printf(":");
 		if(ret)
 		{
 			fprintf(stderr,"flip returns %d\n",ret);
 			break;
 		}
+		need_wait_flip = 1;
 
-		while( waiting )	// waiting flag is reset when the handler is run.
-		{
-			FD_ZERO(&fds);
-			FD_SET(G_drm_dev, &fds);
-			evCtx.version = DRM_EVENT_CONTEXT_VERSION;
-			evCtx.page_flip_handler = dummy_page_flip_handler;
-
-			tv.tv_sec = 0;
-			tv.tv_usec = 500000;
-			int status = select(G_drm_dev+1,&fds,0,0,&tv);
-			if(status!=1)
-			{
-				printf("select returns %d\n",status);
-				fl+=1000000;
-				break;
-			}
-			drmHandleEvent(G_drm_dev,&evCtx);
-			break;
-		}
 
 //		memcpy( fb[1].data , fb[0].data , fb[0].dumb_framebuffer.size );
 //		usleep(20000);

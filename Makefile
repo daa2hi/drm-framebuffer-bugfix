@@ -2,8 +2,8 @@ CC      ?= gcc
 CFLAGS  ?= -O0 -ggdb -pedantic -Wall -I /usr/include/libdrm
 LDFLAGS ?= -ldrm
 
-OBJ = main.o framebuffer.o
-HDR = framebuffer.h globals.h
+OBJ = main.o framebuffer.o pattern.o
+HDR = framebuffer.h globals.h pattern.h
 PROGNAME = drm-framebuffer
 
 exec_prefix ?= /usr
