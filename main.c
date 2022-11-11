@@ -89,6 +89,7 @@ int main(int argc, char** argv)
 			break;
 		case 'f':
 			force_res = 1;
+			break;
 		case 'c':
 			connector = optarg;
 			break;
