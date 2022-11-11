@@ -19,13 +19,11 @@ struct framebuffer {
 	uint8_t *data;
 	uint32_t size;
 	struct drm_mode_create_dumb dumb_framebuffer;
-	drmModeCrtcPtr crtc;
-	drmModeConnectorPtr connector;
 	drmModeModeInfoPtr resolution;
 };
 
 void release_framebuffer(struct framebuffer *fb);
-int get_framebuffer(int select_mode, struct framebuffer *fb);
+int get_framebuffer(drmModeModeInfoPtr mode, struct framebuffer *fb);
 
 const char *connector_type_name(unsigned int type);
 

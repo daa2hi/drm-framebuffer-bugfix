@@ -46,32 +46,19 @@ const char *connector_type_name(unsigned int type)
 
 void release_framebuffer(struct framebuffer *fb)
 {
-	if (fb->fd) {
-		/* Try to become master again, else we can't set CRTC. Then the current master needs to reset everything. */
-		drmSetMaster(fb->fd);
-		if (fb->crtc) {
-			/* Set back to orignal frame buffer */
-			drmModeSetCrtc(fb->fd, fb->crtc->crtc_id, fb->crtc->buffer_id, 0, 0, &fb->connector->connector_id, 1, fb->resolution);
-			drmModeFreeCrtc(fb->crtc);
-		}
+	if(G_drm_dev)
+	{
 		if (fb->buffer_id)
-			drmModeFreeFB(drmModeGetFB(fb->fd, fb->buffer_id));
-		/* This will also release resolution */
-		if (fb->connector) {
-			drmModeFreeConnector(fb->connector);
-			fb->resolution = 0;
-		}
+			drmModeFreeFB(drmModeGetFB(G_drm_dev, fb->buffer_id));
 		if (fb->dumb_framebuffer.handle)
-			ioctl(fb->fd, DRM_IOCTL_MODE_DESTROY_DUMB, fb->dumb_framebuffer);
-		close(fb->fd);
+			ioctl(G_drm_dev, DRM_IOCTL_MODE_DESTROY_DUMB, fb->dumb_framebuffer);
 	}
 
 }
 
-int get_framebuffer(int select_mode, struct framebuffer *fb)
+int get_framebuffer(drmModeModeInfoPtr mode, struct framebuffer *fb)
 {
 	int err;
-	drmModeEncoderPtr encoder = 0;
 
 	if (!G_conn)
 	{
@@ -79,30 +66,8 @@ int get_framebuffer(int select_mode, struct framebuffer *fb)
 		return -EINVAL;
 	}
 
-	// Get the preferred resolution
-	drmModeModeInfoPtr resolution = 0;
-	if(select_mode>=0)
-	{
-		if(select_mode<G_conn->count_modes)
-			resolution = &G_conn->modes[select_mode];
-	}else{
-		for (int i = 0; i < G_conn->count_modes; i++) {
-				drmModeModeInfoPtr res = 0;
-				res = &G_conn->modes[i];
-				if (res->type & DRM_MODE_TYPE_PREFERRED)
-						resolution = res;
-		}
-	}
-
-	if (!resolution)
-	{
-		fprintf(stderr,"Could not find preferred resolution\n");
-		err = -EINVAL;
-		goto cleanup;
-	}
-
-	fb->dumb_framebuffer.height = resolution->vdisplay;
-	fb->dumb_framebuffer.width = resolution->hdisplay;
+	fb->dumb_framebuffer.height = mode->vdisplay;
+	fb->dumb_framebuffer.width = mode->hdisplay;
 	fb->dumb_framebuffer.bpp = 32;
 
 	err = ioctl(G_drm_dev, DRM_IOCTL_MODE_CREATE_DUMB, &fb->dumb_framebuffer);
@@ -111,23 +76,14 @@ int get_framebuffer(int select_mode, struct framebuffer *fb)
 		goto cleanup;
 	}
 
-	err = drmModeAddFB(G_drm_dev, resolution->hdisplay, resolution->vdisplay, 24, 32,
+	err = drmModeAddFB(G_drm_dev, mode->hdisplay, mode->vdisplay, 24, 32,
 			fb->dumb_framebuffer.pitch, fb->dumb_framebuffer.handle, &fb->buffer_id);
 	if (err) {
 		printf("Could not add framebuffer to drm (err=%d)\n", err);
 		goto cleanup;
 	}
 
-	encoder = drmModeGetEncoder(G_drm_dev, G_conn->encoder_id);
-	if (!encoder) {
-		printf("Could not get encoder\n");
-		err = -EINVAL;
-		goto cleanup;
-	}
-
-	/* Get the crtc settings */
-	fb->crtc = drmModeGetCrtc(G_drm_dev, encoder->crtc_id);
-
+	// Get the crtc settings
 	struct drm_mode_map_dumb mreq;
 
 	memset(&mreq, 0, sizeof(mreq));
@@ -146,18 +102,11 @@ int get_framebuffer(int select_mode, struct framebuffer *fb)
 		goto cleanup;
 	}
 
-	/* Make sure we are not master anymore so that other processes can add new framebuffers as well */
-	drmDropMaster(G_drm_dev);
-
 	fb->fd = G_drm_dev;
-	fb->connector = G_conn;
-	fb->resolution = resolution;
+	fb->resolution = mode;
 
 cleanup:
-	/* We don't need the encoder and connector anymore so let's free them */
-	if (encoder)
-		drmModeFreeEncoder(encoder);
-
+	// We don't need the encoder and connector anymore so let's free them
 	if (err)
 		release_framebuffer(fb);
 

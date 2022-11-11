@@ -24,6 +24,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 
@@ -33,16 +34,32 @@ static int verbose = 0;
 
 
 static void usage(void);
+static void dummy_page_flip_handler(int fd,unsigned int sequence,unsigned int tv_sec,unsigned int tv_usec,void *user_data);
 static drmModeConnectorPtr get_connector(const char *con_name);
 static int list_resources();
-static int get_resolution();
+static drmModeModeInfoPtr find_resolution(int w,int h);
+static char get_prev_crtc();
+static char restore_prev_crtc();
+static char get_master();
+static void release_master();
 static int fill_framebuffer_from_stdin(struct framebuffer *fb);
+static int show_framebuffer(struct framebuffer *fb);
+static void wait_break();
 
 
 // global vars as declared in globals.h
 int G_drm_dev = -1;
 drmModeResPtr G_drmres = 0;
 drmModeConnectorPtr G_conn = 0;
+drmModeEncoderPtr G_enc = 0;
+drmModeCrtcPtr G_crtc = 0;
+uint32_t G_crtcId = 0;
+drmModeModeInfoPtr G_mode = 0;
+
+char G_master = 0;
+
+drmModeModeInfo G_prev_mode;
+uint32_t G_prev_bufId = 0;
 
 int main(int argc, char** argv)
 {
@@ -50,12 +67,12 @@ int main(int argc, char** argv)
 	char *connector = 0;
 	int c;
 	int list = 0;
-	int resolution = 0;
 	int ret;
-	int mode_select=-1;
+	int choose_width = -1;
+	int choose_height = -1;
 
 	opterr = 0;
-	while ((c = getopt (argc, argv, "d:c:lrhvm:")) != -1) {
+	while ((c = getopt (argc, argv, "d:c:lhvx:y:")) != -1) {
 		switch (c)
 		{
 		case 'd':
@@ -67,11 +84,11 @@ int main(int argc, char** argv)
 		case 'l':
 			list = 1;
 			break;
-		case 'r':
-			resolution = 1;
+		case 'x':
+			choose_width = strtol(optarg,0,0);
 			break;
-		case 'm':
-			mode_select = strtol(optarg,0,0);
+		case 'y':
+			choose_height = strtol(optarg,0,0);
 			break;
 		case 'h':
 			usage();
@@ -84,9 +101,16 @@ int main(int argc, char** argv)
 		}
 	}
 
-	if (dri_device == 0) {
-		printf("Please set a device\n");
-		return 3;
+	if (connector==0)
+	{
+		printf("No connector selcted. Use -l to see all connectors of a device.\n");
+		return 1;
+	}
+
+	if (dri_device==0)
+	{
+		dri_device = "/dev/dri/card0";
+		printf("no device selected with -d . Using default '%s'\n",dri_device);
 	}
 
 	G_drm_dev = open(dri_device, O_RDWR);
@@ -117,37 +141,117 @@ int main(int argc, char** argv)
 		fprintf(stderr,"Error getting drm connector '%s'\n",connector);
 		goto leave;
 	}
-
-	if (resolution)
+	G_enc = drmModeGetEncoder(G_drm_dev,G_conn->encoder_id);
+	if(!G_enc)
 	{
-		return get_resolution(dri_device, connector);
+		fprintf(stderr,"Error getting drm encoder for connector\n");
+		goto leave;
 	}
+
+	G_crtc = drmModeGetCrtc(G_drm_dev,G_enc->crtc_id);
+	G_crtcId = G_enc->crtc_id;
+	printf("Crtc: %u\n",(unsigned int)(G_crtcId));
+
+	G_mode = find_resolution(choose_width,choose_height);
+	if(!G_mode)
+		goto leave;
+
+	if(!get_prev_crtc())
+		goto leave;
 
 	struct framebuffer fb[3];
 	fb[0].fd=fb[1].fd=fb[2].fd=-1;
 	for(int i=0;i<3;i++)
 	{
-		if(get_framebuffer(mode_select, fb+i))
+		if(get_framebuffer(G_mode,fb+i))
 		{
 			fprintf(stderr,"Error creating framebuffers\n");
 			ret = 4;goto leave;
 		}
 	}
+
+	if(!get_master())
+		return 1;
+
 	ret = 1;
-	if(!fill_framebuffer_from_stdin(fb+0))
+	if(fill_framebuffer_from_stdin(fb+0))
 	{
-		// successfully shown.
-		ret = 0;
+		ret = 1;
+		goto leave;
 	}
+
+	memcpy( fb[1].data+8 , fb[0].data , fb[0].dumb_framebuffer.size-8 );
+
+	show_framebuffer(fb+0);
+//	show_framebuffer(fb+1);
+
+	int ress[100];
+	for(int fl=0;fl<80;fl++)
+	{
+		fd_set fds;
+		drmEventContext evCtx;
+		struct timeval tv;
+		char waiting;
+
+		waiting = 1;
+		ret = drmModePageFlip( G_drm_dev , G_crtcId , fb[fl&1].buffer_id , DRM_MODE_PAGE_FLIP_EVENT , &waiting );
+		ress[fl] = ret;
+		if(ret)
+		{
+			fprintf(stderr,"flip returns %d\n",ret);
+			break;
+		}
+
+		while( waiting )	// waiting flag is reset when the handler is run.
+		{
+			FD_ZERO(&fds);
+			FD_SET(G_drm_dev, &fds);
+			evCtx.version = DRM_EVENT_CONTEXT_VERSION;
+			evCtx.page_flip_handler = dummy_page_flip_handler;
+
+			tv.tv_sec = 0;
+			tv.tv_usec = 500000;
+			int status = select(G_drm_dev+1,&fds,0,0,&tv);
+			if(status!=1)
+			{
+				printf("select returns %d\n",status);
+				fl+=1000000;
+				break;
+			}
+			drmHandleEvent(G_drm_dev,&evCtx);
+			break;
+		}
+
+//		memcpy( fb[1].data , fb[0].data , fb[0].dumb_framebuffer.size );
+//		usleep(20000);
+//		memcpy( fb[1].data+8 , fb[0].data , fb[0].dumb_framebuffer.size-8 );
+//		usleep(20000);
+	}
+	for(int fl=0;fl<10;fl++)
+		printf("%d   ",ress[fl]);
+	printf("\n");
+
+
+	wait_break();
+
 leave:
 	for(int i=0;i<3;i++)
 	{
-		if(fb[i].fd>=0)	release_framebuffer(fb+i);
+		if(fb[i].fd>=0)release_framebuffer(fb+i);
 		fb[i].fd=-1;
 	}
 
 	if(G_drm_dev>=0)
 	{
+		restore_prev_crtc();
+
+		release_master();
+
+		if(G_enc)
+		{
+			drmModeFreeEncoder(G_enc);
+			G_enc = 0;
+		}
 		if(G_conn)
 		{
 			drmModeFreeConnector(G_conn);
@@ -164,6 +268,10 @@ leave:
 	return ret;
 }
 
+static void dummy_page_flip_handler(int fd,unsigned int sequence,unsigned int tv_sec,unsigned int tv_usec,void *user_data)
+{
+//	*((char*)user_data) = 0;
+}
 
 static void usage(void)
 {
@@ -275,53 +383,94 @@ static int list_resources()
 	return 0;
 }
 
-static int get_resolution()
+static drmModeModeInfoPtr find_resolution(int w,int h)
 {
-	int err = 0;
-	drmModeResPtr res;
-
-	res = drmModeGetResources(G_drm_dev);
-	if (!res)
-	{
-		printf("Could not get drm resources\n");
-		return -EINVAL;
-	}
-
-	if (!G_conn)
-	{
-		printf("Connector not acquired before call.\n");
-		return -EINVAL;
-	}
+	drmModeModeInfoPtr res_best;
+	int mq;
 
 	// Get the preferred resolution
 	drmModeModeInfoPtr resolution = 0;
+	mq = -1;
+	res_best = 0;
 	for (int i=0;i<G_conn->count_modes;i++)
 	{
+		int q = 0;
 		resolution = &G_conn->modes[i];
-		if (resolution->type & DRM_MODE_TYPE_PREFERRED)
-				break;
+		if(resolution->type & DRM_MODE_TYPE_PREFERRED)
+			q++;
+		if( w == resolution->hdisplay )
+			q+=2;
+		if( h == resolution->vdisplay )
+			q+=2;
+		if( !res_best || q>mq )
+			{res_best=resolution;mq=q;}
 	}
 
-	if (!resolution)
+	if (!res_best)
 	{
-		printf("Could not find preferred resolution\n");
-		err = -EINVAL;
-		goto error;
+		fprintf(stderr,"Could not find a resolution\n");
+		return 0;
 	}
 
-	printf("%ux%u\n", resolution->hdisplay, resolution->vdisplay);
+	printf("%ux%u\n", res_best->hdisplay, res_best->vdisplay);
 
-error:
-	drmModeFreeResources(res);
-
-	return err;
+	return res_best;
 }
 
+static char get_prev_crtc()
+{
+	G_prev_bufId = G_crtc->buffer_id;
+	G_prev_mode = G_crtc->mode;
+	return 1;
+}
+
+static char restore_prev_crtc()
+{
+	int res;
+	res = 0;
+	if( G_drm_dev>=0 && G_prev_bufId && G_conn )
+	{
+		printf(
+				"setting previous mode for crtcId %u: bufID=%u, mode %u*%u\n" ,
+				(unsigned int)G_crtcId ,
+				(unsigned int)G_prev_bufId ,
+				(unsigned int)G_prev_mode.hdisplay ,
+				(unsigned int)G_prev_mode.vdisplay
+		);
+		res = drmModeSetCrtc(G_drm_dev,G_crtcId, 0, 0, 0, NULL, 0, NULL);
+		res = drmModeSetCrtc(G_drm_dev,G_crtcId,G_prev_bufId,0,0,&(G_conn->connector_id),1,&G_prev_mode);
+	}
+	return res==0;
+}
+
+static char get_master()
+{
+	int ret;
+	if(G_drm_dev<0)
+		return 0;
+	if(G_master)
+		return 1;
+
+	ret=drmSetMaster(G_drm_dev);
+	if(ret)
+	{
+		fprintf(stderr,"could not get DRM master role. res=%d\n",ret);
+		return 0;
+	}
+	G_master=1;
+	return 1;
+}
+
+static void release_master()
+{
+	if( G_master && G_drm_dev>=0 )
+		drmDropMaster(G_drm_dev);
+	G_drm_dev=0;
+}
 
 static int fill_framebuffer_from_stdin(struct framebuffer *fb)
 {
 	size_t total_read = 0;
-	int ret;
 
 	print_verbose("Loading image\n");
 	while (total_read < fb->dumb_framebuffer.size)
@@ -334,19 +483,23 @@ static int fill_framebuffer_from_stdin(struct framebuffer *fb)
 		total_read += sz;
 	}
 
-	/* Make sure we synchronize the display with the buffer. This also works if page flips are enabled */
-	ret = drmSetMaster(fb->fd);
-	if(ret)
-	{
-		printf("Could not get master role for DRM.\n");
-		return ret;
-	}
-	drmModeSetCrtc(fb->fd, fb->crtc->crtc_id, 0, 0, 0, NULL, 0, NULL);
-	drmModeSetCrtc(fb->fd, fb->crtc->crtc_id, fb->buffer_id, 0, 0, &fb->connector->connector_id, 1, fb->resolution);
-	drmDropMaster(fb->fd);
+	return 0;
+}
+
+static int show_framebuffer(struct framebuffer *fb)
+{
+
+	// Make sure we synchronize the display with the buffer. This also works if page flips are enabled
+	drmModeSetCrtc(G_drm_dev, G_crtc->crtc_id, 0, 0, 0, NULL, 0, NULL);
+	drmModeSetCrtc(G_drm_dev, G_crtc->crtc_id, fb->buffer_id, 0, 0, &G_conn->connector_id, 1, fb->resolution);
 
 	print_verbose("Sent image to framebuffer\n");
 
+	return 0;
+}
+
+static void wait_break()
+{
 	sigset_t wait_set;
 	sigemptyset(&wait_set);
 	sigaddset(&wait_set, SIGTERM);
@@ -355,8 +508,5 @@ static int fill_framebuffer_from_stdin(struct framebuffer *fb)
 	int sig;
 	sigprocmask(SIG_BLOCK, &wait_set, NULL );
 	sigwait(&wait_set, &sig);
-
-	return 0;
 }
-
 
