@@ -72,6 +72,7 @@ int main(int argc, char** argv)
 	int choose_width = -1;
 	int choose_height = -1;
 	char need_wait_flip;
+	char waiting;
 
 	opterr = 0;
 	while ((c = getopt (argc, argv, "d:c:lhvx:y:i")) != -1) {
@@ -196,17 +197,16 @@ int main(int argc, char** argv)
 	show_framebuffer(fb+0);
 //	show_framebuffer(fb+1);
 
-	usleep(1000000);
+	usleep(100000);
 	need_wait_flip = 0;
+	waiting = 0;
 
 	int ress[100];
-	for(int fl=0;fl<80;fl++)
+	for(int fl=1200-1;fl>0;fl--)
 	{
 		fd_set fds;
 		drmEventContext evCtx;
 		struct timeval tv;
-		char waiting;
-
 
 		fill_pattern(
 				(uint32_t*)fb[fl&1].data ,
@@ -234,7 +234,7 @@ int main(int argc, char** argv)
 					fl+=1000000;
 					break;
 				}
-				printf(".");
+				//printf(".");
 				drmHandleEvent(G_drm_dev,&evCtx);
 				printf(",");
 				need_wait_flip = 0;
@@ -242,16 +242,18 @@ int main(int argc, char** argv)
 			}
 		}
 
+		if(fl<2)
+			break;
 
-		waiting = 1;
 		ret = drmModePageFlip( G_drm_dev , G_crtcId , fb[fl&1].buffer_id , DRM_MODE_PAGE_FLIP_EVENT , &waiting );
-		ress[fl] = ret;
+		if(fl<10)ress[fl] = ret;
 		printf(":");
 		if(ret)
 		{
 			fprintf(stderr,"flip returns %d\n",ret);
 			break;
 		}
+		waiting = 1;
 		need_wait_flip = 1;
 
 
@@ -260,12 +262,15 @@ int main(int argc, char** argv)
 //		memcpy( fb[1].data+8 , fb[0].data , fb[0].dumb_framebuffer.size-8 );
 //		usleep(20000);
 	}
+	printf("\nloop done.\n");
+	fflush(stdout);
+	usleep(100000);
 	for(int fl=0;fl<10;fl++)
 		printf("%d   ",ress[fl]);
 	printf("\n");
 
 
-	wait_break();
+	//wait_break();
 
 leave:
 	for(int i=0;i<3;i++)

@@ -23,7 +23,7 @@ void fill_pattern(uint32_t *buffer,uint16_t W,uint16_t H,uint16_t frameNo)
 		// first cut
 		if(frameNo)
 		{
-			memcpy(wr,pat_rd,frameNo*4);
+			memcpy(wr,pat_rd+PATSIZE-frameNo,frameNo*4);
 			wr+=frameNo;x+=frameNo;
 		}
 		// middle full circles
@@ -40,8 +40,8 @@ void fill_pattern(uint32_t *buffer,uint16_t W,uint16_t H,uint16_t frameNo)
 
 static void gen_base_pattern()
 {
-	uint32_t Ro2 = PATSIZE*PATSIZE*4;
-	uint32_t Ri2 = (PATSIZE-2)*(PATSIZE-2)*4;
+	uint32_t Ro2 = (PATSIZE-2)*(PATSIZE-2)*4;
+	uint32_t Ri2 = (PATSIZE-6)*(PATSIZE-6)*4;
 	for(uint32_t y=0;y<PATSIZE;y++)
 	{
 		int32_t y4 = (int32_t)(y<<2)+2-PATSIZE*2;
@@ -63,7 +63,7 @@ static void gen_base_pattern()
 				if((y^x)&4)
 					color += 0x00FF0000;
 				else
-					color += 0x000000FF;
+					color += 0x0000FF00;
 			}
 			pat[x+PATSIZE*y] = color;
 		}
